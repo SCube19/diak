@@ -11,7 +11,7 @@ SYS_EXIT 	equ 60
 TWOBYTEMIN		equ	0x80
 THREEBYTEMIN 	equ 0x880
 FOURBYTEMIN		equ 0x10880
-
+UTF8MAX			equ 0x10FFFF
 ;other constants for clarity and easier refactoring
 inputChunk 	equ 1
 moduloVal 	equ 0x10FF80
@@ -85,17 +85,22 @@ _exit2:
 
 _diakAlg:
 	call 	_toUnicode	;based on first byte it converts multiple utf-8 bytes to single unicode value stored in rax, and length in rdx
-	cmp 	rdx, 1		;if length is 1 then char is utf-8 valid and we wont diakrynize it 
+	cmp 	rdi, 1		;if length is 1 then char is utf-8 valid and we wont diakrynize it 
 	je		_printer
 
 	mov 	rdi, rdx	;good practice tells to make rdi and rsi function args
 	mov		rsi, rax
+
 	call	_shortestPossible	;check if given char is utf-8 valid - its written in the shortest way possible
 
-	call 	_diakrytynization
-	call	_toUtf
+	call 	_diakrytynization	;diakrytynization function, calculation is stored in rax
 
+	mov 	rsi, rax	;again good practice to store unicode in rsi
+	call	_toUtf
+	
 _printer:
+	mov 	rdi, rdx	;good practice tells to make rdi and rsi function args
+	mov		rsi, rax
 	call	_writeUtf
 	jmp 	_diakAlg
 ;//////////////////////////////////////////////////////////////////////
@@ -103,10 +108,9 @@ _printer:
 ;////////////////////////DIAKRYTYNIZATION BLOCK//////////////////////////////////////
 ;calculate diakrynized unicode value and store in rax
 ;TAKES rsi 
-;CHANGES rsi
+;CHANGES rsi, r11, rcx, r9, r10, r8, rsi, rax, rdx 
 _diakrytynization:
-	push 	r12			;good practice is to leave r12 unchanged and we will use it in modulo
-	mov		r12, moduloVal
+	mov		r8, moduloVal
 	mov		r9, rbp		;we need to leave rbp constant
 	mov		rcx, [r9]	;get argc into rcx
 	dec 	rcx			;ignore path
@@ -121,7 +125,7 @@ _dLoop:
 
 	mov 	rax, r10	;set rax to x^some power
 	mul		QWORD [r9]	;multiply with arg
-	modulo	r12 			;modulo the result to avoid overflow
+	modulo	r8 			;modulo the result to avoid overflow
 	add		r11, rax	;add loop result to overall result
 	;here we could also modulo r11 but maximum we add is 0x10FF80
 	;which means we could technically put around 8279627000000 loops in r11
@@ -135,16 +139,55 @@ _dLoop:
 
 	mov 	rax, r11	;get result into rax
 	add 	rax, 0x80 	;w() + 0x80
-	modulo	r12			;we modulo the very last result
-	pop 	r12
+	modulo	r8			;we modulo the very last result
 	ret
 ;////////////////////////////////////////////////////////////////////////////////////
 
 ;/////////////////////////TO UTF BLOCK///////////////////////////////////////////////
 ;convert unicode to utf8 for output purposes
-;TAKES
+;TAKES	rsi
 ;CHANGES
 _toUtf:
+	mov		r9b, 11000000b 		;will be used to set first bits of the first byte
+	mov 	r10, 1				;indicates number of bytes after the first one
+	cmp		rsi, THREEBYTEMIN 	; simple comparisons of unicode value to determine byte length
+	jb		_toUtfConv
+
+	add		r9b, 00100000b
+	inc		r10
+	cmp		rsi, FOURBYTEMIN
+	jb		_toUtfConv
+
+	add		r9b, 00010000b
+	inc		r10
+_toUtfConv:
+	mov		r8, rsi		;copying unicode value to manipulate it and store overall result
+	
+	mov 	rax, 6		;get 6*r10 into rcx 
+	mov		rcx, r10
+	mul		rcx
+	mov 	rcx, rax
+
+	shr		r8d, cl		;6*bytes shift to right will leave only significant bits of the first byte
+	add		r8b, r9b	;finishing to construct first byte
+
+_toUtfLoop:
+	sub		rcx, 6		;rcx is loop counter as well as shitf left number so that we end up with next 6bits at the end of al 
+	shl		r8d, 8		;make room for next byte
+
+	mov		rax, rsi		;copying for bit manipulation
+	shr		eax, cl			;shifting so that we end up with needed 6 bits at the end of al
+	shCln	al, 2			;cleaning first slots of al
+	add		al, 10000000b	;setting byte to 10xxxxxx
+
+	add		r8b, al			;adding byte
+
+	cmp		rcx, 0			;Looping
+	jne		_toUtfLoop
+
+	mov		rax, r8			;returning calculation in rax
+	mov		rdx, r10		;returning calculation in rdx
+	inc		rdx				;returning byte length in rdx (it will be usefull in the output)
 	ret
 ;////////////////////////////////////////////////////////////////////////////////////
 
@@ -216,6 +259,9 @@ _uniLoop:
 ;TAKES rsi, rdi
 ;CHANGES flags
 _shortestPossible:
+	cmp 	rsi, UTF8MAX
+	ja		_exit1
+
 	cmp 	rdi, 2		;choose branch
 	je		_twoB
 	cmp 	rdi, 3
