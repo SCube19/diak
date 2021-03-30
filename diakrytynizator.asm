@@ -11,14 +11,16 @@ SYS_EXIT 	equ 60
 TWOBYTEMIN		equ	0x80
 THREEBYTEMIN 	equ 0x880
 FOURBYTEMIN		equ 0x10880
+
 ;other constants for clarity and easier refactoring
 inputChunk 	equ 1
+moduloVal 	equ 0x10FF80
 
 section .data
 
 section .bss
-	output resb 4
-	inputBuff resb inputChunk
+	output 		resb 4
+	inputBuff 	resb inputChunk
 
 section .text
 	global _start
@@ -57,6 +59,13 @@ section .text
 	shl		%1, %2
 	shr		%1, %2
 %endmacro
+
+;modulo rax % %1 and store in rax
+%macro modulo 1
+	xor 	rdx, rdx
+	div		%1
+	mov 	rax, rdx
+%endmacro
 ;-----------------------------------------------------------------
 
 ;//////////////////////MAIN CODE BLOCK///////////////////////////////
@@ -79,13 +88,73 @@ _diakAlg:
 	cmp 	rdx, 1		;if length is 1 then char is utf-8 valid and we wont diakrynize it 
 	je		_printer
 
+	mov 	rdi, rdx	;good practice tells to make rdi and rsi function args
+	mov		rsi, rax
 	call	_shortestPossible	;check if given char is utf-8 valid - its written in the shortest way possible
-	ret
-	
+
+	call 	_diakrytynization
+	call	_toUtf
+
 _printer:
-	print 	inputBuff, inputChunk
+	call	_writeUtf
 	jmp 	_diakAlg
 ;//////////////////////////////////////////////////////////////////////
+
+;////////////////////////DIAKRYTYNIZATION BLOCK//////////////////////////////////////
+;calculate diakrynized unicode value and store in rax
+;TAKES rsi 
+;CHANGES rsi
+_diakrytynization:
+	push 	r12			;good practice is to leave r12 unchanged and we will use it in modulo
+	mov		r12, moduloVal
+	mov		r9, rbp		;we need to leave rbp constant
+	mov		rcx, [r9]	;get argc into rcx
+	dec 	rcx			;ignore path
+
+	sub		rsi, 0x80	;w(x - 0x80)
+	mov		r10, 1		;will store x^some power
+	xor 	r11, r11	;init register for storing sum
+
+	add		r9, 8		;set r9 ptr to path
+_dLoop:
+	add		r9, 8		;set r9 ptr to next arg
+
+	mov 	rax, r10	;set rax to x^some power
+	mul		QWORD [r9]	;multiply with arg
+	modulo	r12 			;modulo the result to avoid overflow
+	add		r11, rax	;add loop result to overall result
+	;here we could also modulo r11 but maximum we add is 0x10FF80
+	;which means we could technically put around 8279627000000 loops in r11
+	;which is possible but so unlikely that modulo here would be perfomance issue
+
+	mov 	rax, r10	;get x^some power into rax
+	mul 	rsi			;calc x^some power + 1
+	mov 	r10, rax	;get it back into r10
+
+	loop	_dLoop		;LOOP END
+
+	mov 	rax, r11	;get result into rax
+	add 	rax, 0x80 	;w() + 0x80
+	modulo	r12			;we modulo the very last result
+	pop 	r12
+	ret
+;////////////////////////////////////////////////////////////////////////////////////
+
+;/////////////////////////TO UTF BLOCK///////////////////////////////////////////////
+;convert unicode to utf8 for output purposes
+;TAKES
+;CHANGES
+_toUtf:
+	ret
+;////////////////////////////////////////////////////////////////////////////////////
+
+;/////////////////////////WRITE UTF BLOCK////////////////////////////////////////////
+;writes given utf output
+;TAKES
+;CHANGES
+_writeUtf:
+	ret
+;////////////////////////////////////////////////////////////////////////////////////
 
 ;/////////////////////////TO UNICODE BLOCK///////////////////////////////////////////
 ;calculates utf-8 to unicode, storing unicode in rax, and char byte length in rdx
@@ -144,23 +213,23 @@ _uniLoop:
 
 ;/////////////////////////SHORTEST POSSIBLE BLOCK///////////////////////////////////
 ;checks if utf-8 char is written in shortest way possible 
-;TAKES rax, rdx
+;TAKES rsi, rdi
 ;CHANGES flags
 _shortestPossible:
-	cmp 	rdx, 2		;choose branch
+	cmp 	rdi, 2		;choose branch
 	je		_twoB
-	cmp 	rdx, 3
+	cmp 	rdi, 3
 	je		_threeB
 
-	cmp		rax, FOURBYTEMIN	;comparing with constants to check validity
+	cmp		rsi, FOURBYTEMIN	;comparing with constants to check validity
 	jb		_exit1
 	ret 
 _twoB:
-	cmp		rax, TWOBYTEMIN
+	cmp		rsi, TWOBYTEMIN
 	jb		_exit1
 	ret
 _threeB:
-	cmp		rax, THREEBYTEMIN
+	cmp		rsi, THREEBYTEMIN
 	jb		_exit1
 	ret
 ;///////////////////////////////////////////////////////////////////////////////////
