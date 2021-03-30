@@ -44,15 +44,6 @@ section .text
 	je		%1
 %endmacro
 
-;print %2 bytes from %1
-%macro print 2
-	mov 	rax, SYS_WRITE
-	mov 	rdi, STDOUT
-	mov		rsi, %1
-	mov 	rdx, %2
-	syscall
-%endmacro
-
 ;shifts %1 left and right for %2
 ;to set first %2 bits to 0
 %macro shCln 2
@@ -83,9 +74,10 @@ _exit1:
 _exit2:
 	exit 	2
 
+;/////////////////////////DIAK ALG BLOCK//////////////////////////////
 _diakAlg:
 	call 	_toUnicode	;based on first byte it converts multiple utf-8 bytes to single unicode value stored in rax, and length in rdx
-	cmp 	rdi, 1		;if length is 1 then char is utf-8 valid and we wont diakrynize it 
+	cmp 	rdx, 1		;if length is 1 then char is utf-8 valid and we wont diakrynize it 
 	je		_printer
 
 	mov 	rdi, rdx	;good practice tells to make rdi and rsi function args
@@ -144,9 +136,9 @@ _dLoop:
 ;////////////////////////////////////////////////////////////////////////////////////
 
 ;/////////////////////////TO UTF BLOCK///////////////////////////////////////////////
-;convert unicode to utf8 for output purposes
+;convert unicode to utf8 for output purposes, calculates utf-8 char in rax, and its byte length in rdx
 ;TAKES	rsi
-;CHANGES
+;CHANGES r9, r10, rax, rcx, rdx
 _toUtf:
 	mov		r9b, 11000000b 		;will be used to set first bits of the first byte
 	mov 	r10, 1				;indicates number of bytes after the first one
@@ -193,9 +185,24 @@ _toUtfLoop:
 
 ;/////////////////////////WRITE UTF BLOCK////////////////////////////////////////////
 ;writes given utf output
-;TAKES
-;CHANGES
+;TAKES rsi, rdi
+;CHANGES	rsi, r8, r9, r10
 _writeUtf:
+	bswap	esi				;swapping bytes as they are inserted inverted
+	mov		[output], esi	;inserting to mem
+	mov 	r8, rdi			;store byte length
+
+	mov 	r9, 4			;r9 will store byte offset
+	sub 	r9, r8
+	mov 	r10, output		;r10 will store output+offset
+	add		r10, r9
+
+	mov 	rax, SYS_WRITE	;syscall config
+	mov 	rdi, STDOUT
+	mov		rsi, r10
+	mov 	rdx, r8
+	syscall
+
 	ret
 ;////////////////////////////////////////////////////////////////////////////////////
 
@@ -206,6 +213,7 @@ _writeUtf:
 _toUnicode:
 	gInBuff	_exit		;inputChunk gets into the buffer (currently 1 byte)
 	mov 	r8, [inputBuff] ;store input in some register
+	mov		rax, r8		;if 1 byte then rax needs to contain answer
 	mov 	rdx, 1		;we know that length is al least 1 (or error)
 
 	bt		r8w, 7		;if first bit is 0 then we have ascii character (bt must have at least 16bit register)
