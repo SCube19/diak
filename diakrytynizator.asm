@@ -1,23 +1,25 @@
-;constants for clearer code
-STDIN equ 0
-STDOUT equ 1
-STDERR equ 2
+;constants for cleaner code
+STDIN 	equ 0
+STDOUT 	equ 1
+STDERR 	equ 2
 
-SYS_READ equ 0
-SYS_WRITE equ 1
-SYS_EXIT equ 60
+SYS_READ 	equ 0
+SYS_WRITE 	equ 1
+SYS_EXIT 	equ 60
+
+;other constants for clarity and easier refactoring
+inputChunk 	equ 1
 
 section .data
-	inputChunk db 1
 
 section .bss
-	inputText resb 20
-	output resb 1
+	output resb 4
+	inputBuff resb inputChunk
 
 section .text
 	global _start
 
-
+;------------------------------------------------------------------
 ;exit macro
 %macro exit 1
     mov 	rax, SYS_EXIT
@@ -25,27 +27,122 @@ section .text
     syscall
 %endmacro
 
-;//////////////////////////////////////////////////////////////////
+;get into input buffer macro
+%macro gInBuff 1
+	mov		rax, SYS_READ
+	mov		rdi, STDIN
+	mov		rsi, inputBuff
+	mov		rdx, inputChunk
+	syscall
+	cmp 	rax, 0
+	je		%1
+%endmacro
+
+;print %2 bytes from %1
+%macro print 2
+	mov 	rax, SYS_WRITE
+	mov 	rdi, STDOUT
+	mov		rsi, %1
+	mov 	rdx, %2
+	syscall
+%endmacro
+
+;shifts %1 left and right for %2
+;to set first %2 bits to 0
+%macro shCln 2
+	shl		%1, %2
+	shr		%1, %2
+%endmacro
+;-----------------------------------------------------------------
+
+;//////////////////////MAIN CODE BLOCK///////////////////////////////
 _start:
-;get command line args section
 	mov 	rbp, rsp 	;rsp is dynamic in its nature so using rbp is more consistent and easier
 						;from now on rbp will be constant and pointing to argc on stack
-	call 	_checkArgsValid
+	call 	_convertArgs
+	call	_diakAlg
 
-;get section
-;change section
-;print section
 ;exit codes section
 _exit:
-	exit 0
+	exit 	0
 _exit1:
-	exit 1
+	exit 	1
 _exit2:
-	exit 2
+	exit 	2
 
-;///////////////////////////////////////////////////////////////////
-;check line arguments validity
-_checkArgsValid:
+_diakAlg:
+	call 	_toUnicode	;based on first byte it converts multiple utf-8 bytes to single unicode value stored in rax, and length in rdx
+						;or if length is 1 then jumps to straight to printer
+	
+_printer:
+	print 	inputBuff, inputChunk
+	jmp _diakAlg
+;//////////////////////////////////////////////////////////////////////
+
+;/////////////////////////TO UNICODE BLOCK///////////////////////////////////////////
+;calculates utf-8 to unicode, storing unicode in rax, and char byte length in rdx
+;TAKES	nothing
+;CHANGES	r8, rax, rdx, r9, rcx, rsi, rdi
+_toUnicode:
+	gInBuff	_exit		;inputChunk gets into the buffer (currently 1 byte)
+	mov 	r8, [inputBuff] ;store input in some register
+	mov 	rdx, 1		;we know that length is al least 1 (or error)
+
+	bt		r8w, 7		;if first bit is 0 then we have ascii character (bt must have at least 16bit register)
+	jnc		_ret		;print ascii right away
+	bt		r8w, 6		;next bit must be 1 for it to be valid utf8
+	jnc		_exit1		;exit error
+
+	;trying to make a loop out of it was troublesome as bt instruction doesnt take register, register pair
+	inc		rdx			;inc byte length
+	bt 		r8w, 5		;check next byte
+	jnc		_convToUni	;if 0 then length definition has ended we can convert
+
+	;repeat
+	inc		rdx
+	bt 		r8w, 4
+	jnc		_convToUni
+
+	inc		rdx
+	bt 		r8w, 3
+	jnc		_convToUni
+
+	jmp		_exit1		;length 5+ indicates an error
+
+_convToUni:
+	push	rdx 		;syscalls will change rdx and we need it to store byte length
+	mov 	rcx, rdx	;for shCln
+	mov 	r9, rcx		;loop counter
+	shCln	r8b, cl		;cleaning first byte of length bits
+	dec		r9			;if length is 2 then we need 1 loop pass etc
+
+_uniLoop:
+	gInBuff	_exit1		;get next byte
+
+	mov 	rax, [inputBuff];store it in rax
+	shCln 	al, 2		;clean definition bytes
+
+	shl		r8, 6		;glueing operation specified on wikipedia
+	add 	r8, rax
+
+	dec		r9			;loop counter operations
+	cmp		r9, 0
+	jne		_uniLoop
+
+	pop 	rdx			;restore length info
+	mov		rax, r8		;make rax an output
+	ret
+
+
+
+
+
+;////////////////////////////////////////////////////////////////////////////////////
+;/////////////////////CONVERT COMMAND LINE ARGS BLOCK////////////////////////////////
+;convert command line args to ints
+;TAKES rbp (can be considered pseudo-arg as rbp is constant in code)
+;CHANGES rax, r8, r9, stack
+_convertArgs:
 	mov 	r9,	rbp		;we need to leave rbp constant
 	mov 	rax, [r9]	;get top of the stack to rax
 	cmp 	rax, 1		;if rax (argc) is 1 then we have 0 args
@@ -55,7 +152,7 @@ _checkArgsValid:
 	dec		r8			;we in reality have argc - 1 args
 
 	add		r9, 8		;set r9 ptr to path
-_checkerLoop:
+_convertLoop:
 	add 	r9, 8		;set rbp ptr to next arg
 	mov 	rdi, [r9]	;_stringToInt gets rdi as an argument so we mov line arguments there
 						;as we are in 64bit system first command line arg will be at 16 bytes offset
@@ -64,21 +161,22 @@ _checkerLoop:
 
 	dec 	r8			;loop logic section
 	cmp 	r8, 0
-	jne		_checkerLoop
+	jne		_convertLoop
 
-	call 	_writeArgs
 	ret
-
+;///////////////////////////////////////////////////////////////////
 
 ;///////////////////////////////////////////////////////////////////
 ;string to int subroutine
-;takes rdi as argument, returns rax
+;TAKES rdi 
+;CHANGES rax, rsi, rdi
 _stringToInt:
+
     xor 	rax, rax	;set rax to 0
 _stoiLoop:
     movzx 	rsi, byte [rdi]	;get character stored at rdi
     cmp 	rsi, 0    	;check \0
-    je 		_stoiEnd
+    je 		_ret
 
     cmp 	rsi, 48     ;checking if char is between 48 and 57
     jb 		_exit2
@@ -92,10 +190,24 @@ _stoiLoop:
 
     inc 	rdi         ;get next char
     jmp 	_stoiLoop	;loop back
-_stoiEnd:
+;///////////////////////////////////////////////////////////////////
+_ret:
 	ret
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+;////////////////////////////TEMPORARY STUFF/////////////////////////////
 ;loop write argument line args
 _writeArgs:
 	mov 	r9, rbp	
@@ -116,5 +228,4 @@ _writeLoop:
 	dec 	r8
 	cmp		r8, 0
 	jne		_writeLoop
-
 	ret
