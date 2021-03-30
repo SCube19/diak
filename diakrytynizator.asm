@@ -7,6 +7,10 @@ SYS_READ 	equ 0
 SYS_WRITE 	equ 1
 SYS_EXIT 	equ 60
 
+;utf-8 constants
+TWOBYTEMIN		equ	0x80
+THREEBYTEMIN 	equ 0x880
+FOURBYTEMIN		equ 0x10880
 ;other constants for clarity and easier refactoring
 inputChunk 	equ 1
 
@@ -72,11 +76,15 @@ _exit2:
 
 _diakAlg:
 	call 	_toUnicode	;based on first byte it converts multiple utf-8 bytes to single unicode value stored in rax, and length in rdx
-						;or if length is 1 then jumps to straight to printer
+	cmp 	rdx, 1		;if length is 1 then char is utf-8 valid and we wont diakrynize it 
+	je		_printer
+
+	call	_shortestPossible	;check if given char is utf-8 valid - its written in the shortest way possible
+	ret
 	
 _printer:
 	print 	inputBuff, inputChunk
-	jmp _diakAlg
+	jmp 	_diakAlg
 ;//////////////////////////////////////////////////////////////////////
 
 ;/////////////////////////TO UNICODE BLOCK///////////////////////////////////////////
@@ -132,10 +140,30 @@ _uniLoop:
 	pop 	rdx			;restore length info
 	mov		rax, r8		;make rax an output
 	ret
+;///////////////////////////////////////////////////////////////////////////////////
 
+;/////////////////////////SHORTEST POSSIBLE BLOCK///////////////////////////////////
+;checks if utf-8 char is written in shortest way possible 
+;TAKES rax, rdx
+;CHANGES flags
+_shortestPossible:
+	cmp 	rdx, 2		;choose branch
+	je		_twoB
+	cmp 	rdx, 3
+	je		_threeB
 
-
-
+	cmp		rax, FOURBYTEMIN	;comparing with constants to check validity
+	jb		_exit1
+	ret 
+_twoB:
+	cmp		rax, TWOBYTEMIN
+	jb		_exit1
+	ret
+_threeB:
+	cmp		rax, THREEBYTEMIN
+	jb		_exit1
+	ret
+;///////////////////////////////////////////////////////////////////////////////////
 
 ;////////////////////////////////////////////////////////////////////////////////////
 ;/////////////////////CONVERT COMMAND LINE ARGS BLOCK////////////////////////////////
@@ -192,40 +220,4 @@ _stoiLoop:
     jmp 	_stoiLoop	;loop back
 ;///////////////////////////////////////////////////////////////////
 _ret:
-	ret
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-;////////////////////////////TEMPORARY STUFF/////////////////////////////
-;loop write argument line args
-_writeArgs:
-	mov 	r9, rbp	
-	mov 	r8, [rbp]
-	dec		r8
-
-	add		r9, 8
-_writeLoop:
-	add		r9, 8
-	mov 	rax, [r9]
-	mov 	[output], rax
-	mov		rax, SYS_WRITE
-	mov		rdi, STDOUT
-	mov		rsi, output
-	mov		rdx, 1
-	syscall
-
-	dec 	r8
-	cmp		r8, 0
-	jne		_writeLoop
 	ret
